@@ -1,9 +1,15 @@
 import uuid
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
 from sqlalchemy import text
+
+from contextlib import asynccontextmanager
+
 from src.db.session import engine, new_session
 from src.db.models import User
+from src.core.security import create_access_token
+from src.api.dependencies import get_current_user
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -26,9 +32,27 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Room booking Service", lifespan=lifespan)
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello"}
+
+class DummyLoginSchema(BaseModel):
+    role: str
+
+
+@app.post("/dummyLogin")
+async def dummy_login(request: DummyLoginSchema):
+    if request.role not in ("admin", "user"):
+        raise HTTPException(status_code=400,detail=
+        {"error": {"code": "INVALID_REQUEST", "message": "role must be admin or user"}}
+        )
+
+    user_id = str(ADMIN_UUID) if request.role == "admin" else str(USER_UUID)
+    token = create_access_token(data={"sub": user_id, "role": request.role})
+    return {"token": token}
+
+
+@app.get("/protected")
+async def protected_route(current_user: dict = Depends(get_current_user)):
+    return {"message": f"Hello {current_user['role']} with id {current_user['user_id']}"}
+
 
 @app.get("/_info")
 async def info():
