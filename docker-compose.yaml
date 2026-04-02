@@ -20,8 +20,6 @@ services:
     build: .
     ports:
       - "8080:8000"
-    volumes:
-      - ./app:/app
     environment:
       - ENVIRONMENT=development
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/room_booking

@@ -5,7 +5,7 @@ from sqlalchemy import String, Integer, DateTime, Time, ForeignKey, UniqueConstr
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from db.base import Base
+from src.db.base import Base
 
 
 class User(Base):

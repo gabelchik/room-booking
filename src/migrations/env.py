@@ -1,8 +1,3 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import asyncio
 from logging.config import fileConfig
 
@@ -12,17 +7,13 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Импорты без префикса app.
-from db.base import Base
-from db.session import engine
-from core.config import settings
-from db.models import User, Room, Schedule, Slot, Booking
+from src.db.base import Base
+from src.db.session import engine
+from src.core.config import settings
+from src.db.models import User, Room, Schedule, Slot, Booking
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
