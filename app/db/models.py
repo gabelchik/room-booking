@@ -5,7 +5,7 @@ from sqlalchemy import String, Integer, DateTime, Time, ForeignKey, UniqueConstr
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from db.base import Base
 
 
 class User(Base):
@@ -45,7 +45,7 @@ class Room(Base):
 class Schedule(Base):
     __tablename__ = "schedules"
     __table_args__ = (UniqueConstraint("room_id",
-                                       name="unique_room_schedule"))
+                                       name="unique_room_schedule"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True),
                                           primary_key=True,
@@ -68,7 +68,7 @@ class Schedule(Base):
 class Slot(Base):
     __tablename__ = "slots"
     __table_args__ = (UniqueConstraint("room_id", "start",
-                                       name="unique_room_slot_start"))
+                                       name="unique_room_slot_start"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True),
                                           primary_key=True,
@@ -91,8 +91,8 @@ class Booking(Base):
                                           primary_key=True,
                                           default=uuid.uuid4)
     slot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("slots.id",
-                                                                              ondelete="RESTRICT",
-                                                                              nullable=False))
+                                                                              ondelete="RESTRICT"),
+                                               nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True),
                                                ForeignKey("users.id",
                                                           ondelete="RESTRICT"),
