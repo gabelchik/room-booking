@@ -6,17 +6,22 @@ from sqlalchemy import text, select
 
 from contextlib import asynccontextmanager
 
-from datetime import date, time, timedelta
+from datetime import datetime, date, time, timedelta
+
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.orm import selectinload
 
 from src.services.slot_generator import generate_slot_for_schedule
 
 from src.db.session import engine, new_session
-from src.db.models import User, Room, Schedule
+from src.db.models import User, Room, Schedule, Slot, Booking
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
 from src.schemas.auth import DummyLoginSchema
 from src.schemas.rooms import RoomCreate, RoomResponse
 from src.schemas.schedule import ScheduleCreate, ScheduleResponse
+from src.schemas.slot import SlotResponse
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -137,6 +142,50 @@ async def create_schedule(
         await session.refresh(new_schedule)
 
         return new_schedule
+
+
+@app.get("/rooms/{room_id}/slots/list", response_model=list[SlotResponse])
+async def list_available_slots(
+        room_id: uuid.UUID,
+        date: str,
+        current_user: dict = Depends(get_current_user)
+):
+    try:
+        target_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "INVALID_REQUEST",
+                              "message": "Invalid date format, use YYYY-MM-DD"}}
+        )
+
+    async with new_session() as session:
+        room = await session.get(Room, room_id)
+        if not room:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "ROOM_NOT_FOUND",
+                                  "message": "Room not found"}}
+            )
+
+    start_day = datetime.combine(
+        target_date, datetime.min.time()).replace(tzinfo=ZoneInfo("UTC"))
+    end_day = start_day + timedelta(days=1)
+
+    query = select(Slot).options(selectinload(Slot.booking)).where(
+        Slot.room_id == room_id,
+        Slot.start >= start_day,
+        Slot.start < end_day
+    ).order_by(Slot.start)
+    result = await session.execute(query)
+    slots = result.scalars().all()
+
+    available_slots = []
+    for slot in slots:
+        if not slot.booking or slot.booking.status != "active":
+            available_slots.append(slot)
+
+    return available_slots
 
 
 @app.get("/protected")
