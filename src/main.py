@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import selectinload
 
-from src.services.slot_generator import generate_slot_for_schedule
+from src.services.slot_generator import generate_slots_for_schedule, generate_future_slots_for_schedules
 
 from src.db.session import engine, new_session
 from src.db.models import User, Room, Schedule, Slot, Booking
@@ -22,6 +22,9 @@ from src.schemas.auth import DummyLoginSchema
 from src.schemas.rooms import RoomCreate, RoomResponse
 from src.schemas.schedule import ScheduleCreate, ScheduleResponse
 from src.schemas.slot import SlotResponse
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -38,6 +41,11 @@ async def lifespan(app: FastAPI):
         if not user:
             session.add(User(id=USER_UUID, role="user"))
         await session.commit()
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=0, minute=10))
+    scheduler.start()
+
     yield
     await engine.dispose()
 
@@ -134,7 +142,7 @@ async def create_schedule(
 
         start_date = date.today()
         end_date = start_date + timedelta(days=7)
-        slots = generate_slot_for_schedule(new_schedule, start_date, end_date)
+        slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
 
         session.add_all(slots)
 
