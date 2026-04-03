@@ -6,7 +6,9 @@ from sqlalchemy import text, select
 
 from contextlib import asynccontextmanager
 
-from datetime import time
+from datetime import date, time, timedelta
+
+from src.services.slot_generator import generate_slot_for_schedule
 
 from src.db.session import engine, new_session
 from src.db.models import User, Room, Schedule
@@ -124,9 +126,18 @@ async def create_schedule(
         )
 
         session.add(new_schedule)
+
+        start_date = date.today()
+        end_date = start_date + timedelta(days=7)
+        slots = generate_slot_for_schedule(new_schedule, start_date, end_date)
+
+        session.add_all(slots)
+
         await session.commit()
         await session.refresh(new_schedule)
+
         return new_schedule
+
 
 @app.get("/protected")
 async def protected_route(current_user: dict = Depends(get_current_user)):
