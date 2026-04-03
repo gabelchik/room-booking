@@ -1,16 +1,20 @@
 import uuid
 
 from fastapi import FastAPI, HTTPException, Depends
+
 from sqlalchemy import text, select
 
 from contextlib import asynccontextmanager
 
+from datetime import time
+
 from src.db.session import engine, new_session
-from src.db.models import User, Room
+from src.db.models import User, Room, Schedule
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
 from src.schemas.auth import DummyLoginSchema
 from src.schemas.rooms import RoomCreate, RoomResponse
+from src.schemas.schedule import ScheduleCreate, ScheduleResponse
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -33,6 +37,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Room booking Service", lifespan=lifespan)
 
+
 @app.post("/dummyLogin")
 async def dummy_login(request: DummyLoginSchema):
     if request.role not in ("admin", "user"):
@@ -44,6 +49,7 @@ async def dummy_login(request: DummyLoginSchema):
     user_id = str(ADMIN_UUID) if request.role == "admin" else str(USER_UUID)
     token = create_access_token(data={"sub": user_id, "role": request.role})
     return {"token": token}
+
 
 @app.get("/rooms", response_model=list[RoomResponse])
 async def list_rooms(current_user: dict = Depends(get_current_user)):
@@ -62,6 +68,7 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
             detail={"error": {"code": "FORBIDDEN",
                               "message": "Only admin can create rooms"}}
         )
+
     async with new_session() as session:
         new_room = Room(
             name=room_data.name,
@@ -73,6 +80,53 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
         await session.refresh(new_room)
         return new_room
 
+
+@app.post("/rooms/{room_id}/schedule/create",
+          response_model=ScheduleResponse, status_code=201)
+async def create_schedule(
+        room_id: uuid.UUID,
+        schedule_data: ScheduleCreate,
+        current_user: dict = Depends(get_current_user)
+        ):
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "FORBIDDEN",
+                              "message": "Only admin can create schedules"}}
+        )
+
+    async with new_session() as session:
+        room = await session.get(Room, room_id)
+        if not room:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "ROOM_NOT_FOUND",
+                                  "message": "Room not found"}}
+            )
+
+        query = select(Schedule).where(Schedule.room_id == room_id)
+        result = await session.execute(query)
+        ex_schedule = result.scalar_one_or_none()
+        if ex_schedule:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": {"code": "SCHEDULE_EXISTS",
+                                  "message": "Schedule already exists for this room"}}
+            )
+
+        start_time = time.fromisoformat(schedule_data.start_time)
+        end_time = time.fromisoformat(schedule_data.end_time)
+        new_schedule = Schedule(
+            room_id = room_id,
+            days_of_week = schedule_data.days_of_week,
+            start_time = start_time,
+            end_time = end_time,
+        )
+
+        session.add(new_schedule)
+        await session.commit()
+        await session.refresh(new_schedule)
+        return new_schedule
 
 @app.get("/protected")
 async def protected_route(current_user: dict = Depends(get_current_user)):
