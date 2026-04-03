@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import selectinload
 
 from src.services.slot_generator import generate_slots_for_schedule, generate_future_slots_for_schedules
-
 from src.db.session import engine, new_session
 from src.db.models import User, Room, Schedule, Slot, Booking
 from src.core.security import create_access_token
@@ -24,7 +23,8 @@ from src.schemas.schedule import ScheduleCreate, ScheduleResponse
 from src.schemas.slot import SlotResponse
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+# from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -43,7 +43,8 @@ async def lifespan(app: FastAPI):
         await session.commit()
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=0, minute=10))
+    # scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))
+    scheduler.add_job(generate_future_slots_for_schedules, IntervalTrigger(seconds=10))
     scheduler.start()
 
     yield
