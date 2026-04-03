@@ -1,15 +1,16 @@
 import uuid
 
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import text, select
 
 from contextlib import asynccontextmanager
 
 from src.db.session import engine, new_session
-from src.db.models import User
+from src.db.models import User, Room
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
+from src.schemas.auth import DummyLoginSchema
+from src.schemas.rooms import RoomCreate, RoomResponse
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -32,21 +33,45 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Room booking Service", lifespan=lifespan)
 
-
-class DummyLoginSchema(BaseModel):
-    role: str
-
-
 @app.post("/dummyLogin")
 async def dummy_login(request: DummyLoginSchema):
     if request.role not in ("admin", "user"):
-        raise HTTPException(status_code=400,detail=
-        {"error": {"code": "INVALID_REQUEST", "message": "role must be admin or user"}}
+        raise HTTPException(status_code=400,
+        detail={"error": {"code": "INVALID_REQUEST",
+                          "message": "role must be admin or user"}}
         )
 
     user_id = str(ADMIN_UUID) if request.role == "admin" else str(USER_UUID)
     token = create_access_token(data={"sub": user_id, "role": request.role})
     return {"token": token}
+
+@app.get("/rooms", response_model=list[RoomResponse])
+async def list_rooms(current_user: dict = Depends(get_current_user)):
+    async with new_session() as session:
+        query = select(Room).order_by(Room.created_at)
+        result = await session.execute(query)
+        rooms = result.scalars().all()
+        return rooms
+
+
+@app.post("/rooms/create", response_model=RoomResponse, status_code=201)
+async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "FORBIDDEN",
+                              "message": "Only admin can create rooms"}}
+        )
+    async with new_session() as session:
+        new_room = Room(
+            name=room_data.name,
+            description=room_data.description,
+            size=room_data.size
+        )
+        session.add(new_room)
+        await session.commit()
+        await session.refresh(new_room)
+        return new_room
 
 
 @app.get("/protected")
