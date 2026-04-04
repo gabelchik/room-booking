@@ -2,20 +2,17 @@ import uuid
 
 from fastapi import FastAPI, Depends
 
-from sqlalchemy import text, select, func
+from sqlalchemy import text
 
 from contextlib import asynccontextmanager
 
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, time
 
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.orm import selectinload
-
-from src.services.slot_generator import (generate_slots_for_schedule,
-                                         generate_future_slots_for_schedules)
+from src.services.slot_generator import generate_future_slots_for_schedules
 from src.db.session import engine, new_session
-from src.db.models import User, Room, Schedule, Slot, Booking
+from src.db.models import User
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
 from src.schemas.auth import DummyLoginSchema
@@ -35,6 +32,15 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.api.tags import tags_metadata
 
+from src.services.user_service import ensure_default_users
+from src.services.room_service import get_all_rooms, create_room_s
+from src.services.schedule_service import get_room_by_id, get_existing_schedule, create_schedule_and_slots
+from src.services.slot_service import get_slot_by_id, get_available_slots_for_date
+from src.services.booking_service import (
+    has_active_booking, create_booking_s, get_booking_by_id,
+    cancel_booking_s, get_user_future_bookings, get_all_bookings_paginated
+)
+
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 USER_UUID = uuid.UUID('22222222-2222-2222-2222-222222222222')
@@ -43,13 +49,7 @@ USER_UUID = uuid.UUID('22222222-2222-2222-2222-222222222222')
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with new_session() as session:
-        admin = await session.get(User, ADMIN_UUID)
-        if not admin:
-            session.add(User(id=ADMIN_UUID, role="admin"))
-        user = await session.get(User, USER_UUID)
-        if not user:
-            session.add(User(id=USER_UUID, role="user"))
-        await session.commit()
+        await ensure_default_users(session, ADMIN_UUID, USER_UUID)
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))
@@ -79,9 +79,7 @@ async def dummy_login(request: DummyLoginSchema):
 @app.get("/rooms", response_model=list[RoomResponse], tags=["Rooms"])
 async def list_rooms(current_user: dict = Depends(get_current_user)):
     async with new_session() as session:
-        query = select(Room).order_by(Room.created_at)
-        result = await session.execute(query)
-        rooms = result.scalars().all()
+        rooms = await get_all_rooms(session)
         return rooms
 
 
@@ -91,14 +89,7 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
         raise ForbiddenError(code="FORBIDDEN", message="Only admin can create rooms")
 
     async with new_session() as session:
-        new_room = Room(
-            name=room_data.name,
-            description=room_data.description,
-            capacity=room_data.capacity
-        )
-        session.add(new_room)
-        await session.commit()
-        await session.refresh(new_room)
+        new_room = await create_room_s(session, room_data)
         return new_room
 
 
@@ -112,34 +103,19 @@ async def create_schedule(
         raise ForbiddenError(code="FORBIDDEN", message="Only admin can create schedules")
 
     async with new_session() as session:
-        room = await session.get(Room, room_id)
+        room = await get_room_by_id(session, room_id)
         if not room:
             raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
 
-        query = select(Schedule).where(Schedule.room_id == room_id)
-        result = await session.execute(query)
-        ex_schedule = result.scalar_one_or_none()
+        ex_schedule = await get_existing_schedule(session, room_id)
         if ex_schedule:
             raise ConflictError(code="SCHEDULE_EXISTS", message="Schedule already exists for this room")
 
         start_time = time.fromisoformat(schedule_data.start_time)
         end_time = time.fromisoformat(schedule_data.end_time)
-        new_schedule = Schedule(
-            room_id=room_id,
-            days_of_week=schedule_data.days_of_week,
-            start_time=start_time,
-            end_time=end_time,
+        new_schedule = await create_schedule_and_slots(
+            session, room_id, schedule_data.days_of_week, start_time, end_time
         )
-        session.add(new_schedule)
-
-        start_date = date.today()
-        end_date = start_date + timedelta(days=7)
-        slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
-        session.add_all(slots)
-
-        await session.commit()
-        await session.refresh(new_schedule)
-
         return new_schedule
 
 
@@ -155,23 +131,13 @@ async def list_available_slots(
         raise BadRequestError(code="INVALID_REQUEST", message="Invalid date format, use YYYY-MM-DD")
 
     async with new_session() as session:
-        room = await session.get(Room, room_id)
+        room = await get_room_by_id(session, room_id)
         if not room:
             raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
 
-        start_day = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=ZoneInfo("UTC"))
-        end_day = start_day + timedelta(days=1)
+        slots = await get_available_slots_for_date(session, room_id, target_date)
 
-        query = select(Slot).options(selectinload(Slot.booking)).where(
-            Slot.room_id == room_id,
-            Slot.start >= start_day,
-            Slot.start < end_day
-        ).order_by(Slot.start)
-        result = await session.execute(query)
-        slots = result.scalars().all()
-
-        available_slots = [slot for slot in slots if not slot.booking or slot.booking.status != "active"]
-        return available_slots
+        return slots
 
 
 @app.post("/bookings/create", response_model=BookingResponse, status_code=201, tags=["Bookings"])
@@ -180,7 +146,7 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
         raise ForbiddenError(code="FORBIDDEN", message="Only users can create bookings")
 
     async with new_session() as session:
-        slot = await session.get(Slot, booking_data.slot_id)
+        slot = await get_slot_by_id(session, booking_data.slot_id)
         if not slot:
             raise NotFoundError(code="SLOT_NOT_FOUND", message="Slot not found")
 
@@ -188,20 +154,11 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
         if slot.start < now:
             raise BadRequestError(code="INVALID_REQUEST", message="Can't book a slot in the past")
 
-        active_booking = await session.execute(
-            select(Booking).where(Booking.slot_id == slot.id, Booking.status == "active")
-        )
-        if active_booking.scalar_one_or_none():
+        if await has_active_booking(session, booking_data.slot_id):
             raise ConflictError(code="SLOT_ALREADY_BOOKED", message="Slot is already booked")
 
-        new_booking = Booking(
-            slot_id=booking_data.slot_id,
-            user_id=current_user["user_id"],
-            status="active"
-        )
-        session.add(new_booking)
-        await session.commit()
-        await session.refresh(new_booking)
+        new_booking = await create_booking_s(session, slot.id, uuid.UUID(current_user["user_id"]))
+
         return new_booking
 
 @app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse, tags=["Bookings"])
@@ -210,7 +167,7 @@ async def cancel_booking(booking_id: uuid.UUID, current_user: dict = Depends(get
         raise ForbiddenError(code="FORBIDDEN", message="Only users can cancel bookings")
 
     async with new_session() as session:
-        booking = await session.get(Booking, booking_id)
+        booking = await get_booking_by_id(session, booking_id)
         if not booking:
             raise NotFoundError(code="BOOKING_NOT_FOUND", message="Booking not found")
 
@@ -220,9 +177,7 @@ async def cancel_booking(booking_id: uuid.UUID, current_user: dict = Depends(get
         if booking.status == "cancelled":
             return BookingCancelResponse(id=booking.id, status=booking.status)
 
-        booking.status = "cancelled"
-        await session.commit()
-        await session.refresh(booking)
+        booking = await cancel_booking_s(session, booking)
         return BookingCancelResponse(id=booking.id, status=booking.status)
 
 
@@ -232,16 +187,7 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user)):
         raise ForbiddenError(code="FORBIDDEN", message="Only users can view their bookings")
 
     async with new_session() as session:
-        now = datetime.now(ZoneInfo("UTC"))
-        query = (
-            select(Booking)
-            .join(Booking.slot)
-            .where(Booking.user_id == uuid.UUID(current_user["user_id"]))
-            .where(Slot.start >= now)
-            .order_by(Slot.start)
-        )
-        result = await session.execute(query)
-        bookings = result.scalars().all()
+        bookings = await get_user_future_bookings(session, uuid.UUID(current_user["user_id"]))
         return bookings
 
 
@@ -260,16 +206,8 @@ async def list_all_bookings(
     if page_size < 1 or page_size > 100:
         raise BadRequestError(code="INVALID_REQUEST", message="pageSize must be between 1 and 100")
 
-    offset = (page - 1) * page_size
-
     async with new_session() as session:
-        query = select(func.count()).select_from(Booking)
-        total_result = await session.execute(query)
-        total = total_result.scalar()
-
-        stmt = select(Booking).order_by(Booking.created_at.desc()).offset(offset).limit(page_size)
-        result = await session.execute(stmt)
-        bookings = result.scalars().all()
+        bookings, total = await get_all_bookings_paginated(session, page, page_size)
 
         return BookingsListResponse(
             bookings=bookings,
