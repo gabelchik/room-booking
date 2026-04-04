@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from datetime import datetime, date, time, timedelta
 
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import selectinload
 
@@ -277,6 +277,29 @@ async def cancel_booking(booking_id: uuid.UUID,
         await session.commit()
         await session.refresh(booking)
         return BookingCancelResponse(id=booking.id, status=booking.status)
+
+@app.get("/bookings/my", response_model=list[BookingResponse])
+async def get_my_bookings(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "FORBIDDEN",
+                              "message": "Only users can view their bookings"}}
+        )
+
+    async with new_session() as session:
+        now = datetime.now(ZoneInfo("UTC"))
+        query = (
+            select(Booking)
+            .join(Booking.slot)
+            .where(Booking.user_id == uuid.UUID(current_user["user_id"]))
+            .where(Slot.start >= now)
+            .order_by(Slot.start)
+        )
+        result = await session.execute(query)
+        bookings= result.scalars().all()
+        return bookings
+
 
 
 @app.get("/_info")
