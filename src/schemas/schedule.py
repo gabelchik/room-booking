@@ -34,4 +34,3 @@ class ScheduleResponse(BaseModel):
     days_of_week: List[int]
     start_time: time
     end_time: time
-    created_at: datetime
