@@ -33,6 +33,8 @@ from src.core.exceptions import (
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from src.api.tags import tags_metadata
+
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 USER_UUID = uuid.UUID('22222222-2222-2222-2222-222222222222')
@@ -57,10 +59,14 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="Room booking Service", lifespan=lifespan)
+app = FastAPI(title="Room Booking Service",
+              description="Сервис бронирования переговорок",
+              version="1.0.0",
+              openapi_tags=tags_metadata,
+              lifespan=lifespan)
 
 
-@app.post("/dummyLogin")
+@app.post("/dummyLogin", tags=["Auth"])
 async def dummy_login(request: DummyLoginSchema):
     if request.role not in ("admin", "user"):
         raise BadRequestError(code="INVALID_REQUEST", message="role must be admin or user")
@@ -70,7 +76,7 @@ async def dummy_login(request: DummyLoginSchema):
     return {"token": token}
 
 
-@app.get("/rooms", response_model=list[RoomResponse])
+@app.get("/rooms", response_model=list[RoomResponse], tags=["Rooms"])
 async def list_rooms(current_user: dict = Depends(get_current_user)):
     async with new_session() as session:
         query = select(Room).order_by(Room.created_at)
@@ -79,7 +85,7 @@ async def list_rooms(current_user: dict = Depends(get_current_user)):
         return rooms
 
 
-@app.post("/rooms/create", response_model=RoomResponse, status_code=201)
+@app.post("/rooms/create", response_model=RoomResponse, status_code=201, tags=["Rooms"])
 async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise ForbiddenError(code="FORBIDDEN", message="Only admin can create rooms")
@@ -96,7 +102,7 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
         return new_room
 
 
-@app.post("/rooms/{room_id}/schedule/create", response_model=ScheduleResponse, status_code=201)
+@app.post("/rooms/{room_id}/schedule/create", response_model=ScheduleResponse, status_code=201, tags=["Rooms"])
 async def create_schedule(
         room_id: uuid.UUID,
         schedule_data: ScheduleCreate,
@@ -137,7 +143,7 @@ async def create_schedule(
         return new_schedule
 
 
-@app.get("/rooms/{room_id}/slots/list", response_model=list[SlotResponse])
+@app.get("/rooms/{room_id}/slots/list", response_model=list[SlotResponse], tags=["Rooms"])
 async def list_available_slots(
         room_id: uuid.UUID,
         date: str,
@@ -168,7 +174,7 @@ async def list_available_slots(
         return available_slots
 
 
-@app.post("/bookings/create", response_model=BookingResponse, status_code=201)
+@app.post("/bookings/create", response_model=BookingResponse, status_code=201, tags=["Bookings"])
 async def create_booking(booking_data: BookingCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can create bookings")
@@ -198,8 +204,7 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
         await session.refresh(new_booking)
         return new_booking
 
-
-@app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse)
+@app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse, tags=["Bookings"])
 async def cancel_booking(booking_id: uuid.UUID, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can cancel bookings")
@@ -221,7 +226,7 @@ async def cancel_booking(booking_id: uuid.UUID, current_user: dict = Depends(get
         return BookingCancelResponse(id=booking.id, status=booking.status)
 
 
-@app.get("/bookings/my", response_model=list[BookingResponse])
+@app.get("/bookings/my", response_model=list[BookingResponse], tags=["Bookings"])
 async def get_my_bookings(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can view their bookings")
@@ -240,7 +245,7 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user)):
         return bookings
 
 
-@app.get("/bookings/list", response_model=BookingsListResponse)
+@app.get("/bookings/list", response_model=BookingsListResponse, tags=["Bookings"])
 async def list_all_bookings(
         page: int = 1,
         page_size: int = 20,
@@ -272,7 +277,7 @@ async def list_all_bookings(
         )
 
 
-@app.get("/_info")
+@app.get("/_info", tags=["Info"])
 async def info():
     try:
         async with engine.connect() as conn:
