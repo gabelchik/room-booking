@@ -51,7 +51,8 @@ USER_UUID = uuid.UUID('22222222-2222-2222-2222-222222222222')
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with new_session() as session:
-        await ensure_default_users(session, ADMIN_UUID, USER_UUID)
+        async with session.begin():
+            await ensure_default_users(session, ADMIN_UUID, USER_UUID)
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))

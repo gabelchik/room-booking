@@ -14,4 +14,5 @@ new_session = async_sessionmaker(
 
 async def get_session():
     async with new_session() as session:
-        yield session
+        async with session.begin():
+            yield session
