@@ -4,6 +4,9 @@ import datetime
 from zoneinfo import ZoneInfo
 
 
+pytestmark = pytest.mark.usefixtures("setup_test_db")
+
+
 ADMIN_UUID = "11111111-1111-1111-1111-111111111111"
 USER_UUID = "22222222-2222-2222-2222-222222222222"
 

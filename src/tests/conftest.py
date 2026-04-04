@@ -33,7 +33,7 @@ async def override_get_session():
 app.dependency_overrides[get_session] = override_get_session
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function")
 async def setup_test_db():
     async with engine_test.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
