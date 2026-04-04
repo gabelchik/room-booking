@@ -18,13 +18,13 @@ from src.db.models import User, Room, Schedule, Slot, Booking
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
 from src.schemas.auth import DummyLoginSchema
-from src.schemas.rooms import RoomCreate, RoomResponse
+from src.schemas.room import RoomCreate, RoomResponse
 from src.schemas.schedule import ScheduleCreate, ScheduleResponse
 from src.schemas.slot import SlotResponse
+from src.schemas.booking import BookingCreate, BookingResponse, BookingCancelResponse
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-# from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -43,8 +43,7 @@ async def lifespan(app: FastAPI):
         await session.commit()
 
     scheduler = AsyncIOScheduler()
-    # scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))
-    scheduler.add_job(generate_future_slots_for_schedules, IntervalTrigger(seconds=10))
+    scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))
     scheduler.start()
 
     yield
@@ -197,9 +196,52 @@ async def list_available_slots(
     return available_slots
 
 
-@app.get("/protected")
-async def protected_route(current_user: dict = Depends(get_current_user)):
-    return {"message": f"Hello {current_user['role']} with id {current_user['user_id']}"}
+@app.post("/bookings/create", response_model=BookingResponse, status_code=201)
+async def create_booking(booking_data: BookingCreate,
+                         current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "FORBIDDEN",
+                                  "message": "Only users can create bookings"}}
+            )
+
+    async with new_session() as session:
+        slot = await session.get(Slot, booking_data.slot_id)
+        if not slot:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "SLOT_NOT_FOUND",
+                                  "message": "Slot not found"}}
+            )
+
+        now = datetime.now(ZoneInfo("UTC"))
+        if slot.start < now:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": {"code": "INVALID_REQUEST",
+                                  "message": "Can't book a slot in the past"}}
+            )
+
+        active_booking = await session.execute(
+            select(Booking).where(Booking.slot_id == slot.id, Booking.status == "active")
+        )
+        if active_booking.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail={"error": {"code": "SLOT_ALREADY_BOOKED",
+                                  "message": "Slot is already booked"}}
+            )
+
+        new_booking = Booking(
+            slot_id=booking_data.slot_id,
+            user_id=current_user["user_id"],
+            status="active"
+        )
+        session.add(new_booking)
+        await session.commit()
+        await session.refresh(new_booking)
+        return new_booking
 
 
 @app.get("/_info")

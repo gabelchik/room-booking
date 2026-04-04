@@ -53,11 +53,10 @@ async def generate_future_slots_for_schedules():
             .join(max_slot_subquery, Schedule.room_id == max_slot_subquery.c.room_id)
         )
         stmt = await session.execute(query)
-        # schedules_max_slots = stmt.scalars().all()
 
         for schedule, max_slot_date in stmt:
 
-            target_date = dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=7)
+            target_date = dt.datetime.now(ZoneInfo("UTC")).date() + dt.timedelta(days=7)
             if max_slot_date.date() < target_date:
                 start_date = max_slot_date.date() + dt.timedelta(days=1)
                 end_date = target_date
