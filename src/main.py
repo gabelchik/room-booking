@@ -2,17 +2,13 @@ import uuid
 
 from fastapi import FastAPI, Depends
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from contextlib import asynccontextmanager
 
 from datetime import datetime, time
 
 from zoneinfo import ZoneInfo
 
-from src.services.slot_generator import generate_future_slots_for_schedules
-from src.db.session import engine, get_session, new_session
+from src.db.session import get_session
 from src.core.security import create_access_token
 from src.api.dependencies import get_current_user
 
@@ -28,13 +24,10 @@ from src.schemas.booking import (
 from src.core.exceptions import (
     BadRequestError, ForbiddenError, NotFoundError, ConflictError
 )
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from src.core.lifespan import lifespan
 
 from src.api.tags import tags_metadata
 
-from src.services.user_service import ensure_default_users
 from src.services.room_service import get_all_rooms, create_room_s
 from src.services.schedule_service import get_room_by_id, get_existing_schedule, create_schedule_and_slots
 from src.services.slot_service import get_slot_by_id, get_available_slots_for_date
@@ -48,28 +41,15 @@ ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 USER_UUID = uuid.UUID('22222222-2222-2222-2222-222222222222')
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with new_session() as session:
-        async with session.begin():
-            await ensure_default_users(session, ADMIN_UUID, USER_UUID)
-
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(generate_future_slots_for_schedules, CronTrigger(hour=3, minute=0, timezone="UTC"))
-    scheduler.start()
-
-    yield
-    await engine.dispose()
-
-
 app = FastAPI(title="Room Booking Service",
-              description="Сервис бронирования переговорок",
+              description="Room Booking Service",
               version="1.0.0",
               openapi_tags=tags_metadata,
               lifespan=lifespan)
 
 
-@app.post("/dummyLogin", tags=["Auth"])
+@app.post("/dummyLogin", tags=["Auth"],
+          description="Issues a test JWT for the specified role (admin/user)")
 async def dummy_login(request: DummyLoginSchema):
     if request.role not in ("admin", "user"):
         raise BadRequestError(code="INVALID_REQUEST", message="role must be admin or user")
@@ -79,7 +59,8 @@ async def dummy_login(request: DummyLoginSchema):
     return {"token": token}
 
 
-@app.get("/rooms", response_model=list[RoomResponse], tags=["Rooms"])
+@app.get("/rooms", response_model=list[RoomResponse], tags=["Rooms"],
+         description="Shows a list of rooms")
 async def list_rooms(
         current_user: dict = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
@@ -88,7 +69,8 @@ async def list_rooms(
     return rooms
 
 
-@app.post("/rooms/create", response_model=RoomResponse, status_code=201, tags=["Rooms"])
+@app.post("/rooms/create", response_model=RoomResponse, status_code=201,
+          tags=["Rooms"], description="Creates a new room")
 async def create_room(
         room_data: RoomCreate,
         current_user: dict = Depends(get_current_user),
@@ -101,7 +83,10 @@ async def create_room(
     return new_room
 
 
-@app.post("/rooms/{room_id}/schedule/create", response_model=ScheduleResponse, status_code=201, tags=["Rooms"])
+@app.post("/rooms/{room_id}/schedule/create", response_model=ScheduleResponse,
+          status_code=201, tags=["Rooms"],
+          description="Create a meeting schedule (admin only, only once)."
+                      "The slot duration is 30 minutes. The schedule cannot be changed after creation")
 async def create_schedule(
         room_id: uuid.UUID,
         schedule_data: ScheduleCreate,
@@ -127,7 +112,9 @@ async def create_schedule(
     return new_schedule
 
 
-@app.get("/rooms/{room_id}/slots/list", response_model=list[SlotResponse], tags=["Rooms"])
+@app.get("/rooms/{room_id}/slots/list", response_model=list[SlotResponse],
+         tags=["Rooms"], description="The list of slots available for booking"
+                                     "by appointment and date (admin and user)")
 async def list_available_slots(
         room_id: uuid.UUID,
         date: str,
@@ -148,7 +135,8 @@ async def list_available_slots(
     return slots
 
 
-@app.post("/bookings/create", response_model=BookingResponse, status_code=201, tags=["Bookings"])
+@app.post("/bookings/create", response_model=BookingResponse, status_code=201,
+          tags=["Bookings"], description="Create a slot reservation (user only)")
 async def create_booking(booking_data: BookingCreate,
                          current_user: dict = Depends(get_current_user),
                         session: AsyncSession = Depends(get_session)
@@ -171,7 +159,9 @@ async def create_booking(booking_data: BookingCreate,
 
     return new_booking
 
-@app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse, tags=["Bookings"])
+@app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse,
+          tags=["Bookings"], description="Cancel your reservation"
+                                         "(only your own reservation, only the user)")
 async def cancel_booking(booking_id: uuid.UUID,
                          current_user: dict = Depends(get_current_user),
                          session: AsyncSession = Depends(get_session)
@@ -193,7 +183,8 @@ async def cancel_booking(booking_id: uuid.UUID,
     return BookingCancelResponse(id=booking.id, status=booking.status)
 
 
-@app.get("/bookings/my", response_model=list[BookingResponse], tags=["Bookings"])
+@app.get("/bookings/my", response_model=list[BookingResponse],
+         tags=["Bookings"], description="List of current user's armor (user only)")
 async def get_my_bookings(current_user: dict = Depends(get_current_user),
                           session: AsyncSession = Depends(get_session)
 ):
@@ -204,7 +195,8 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user),
     return bookings
 
 
-@app.get("/bookings/list", response_model=BookingsListResponse, tags=["Bookings"])
+@app.get("/bookings/list", response_model=BookingsListResponse,
+         tags=["Bookings"], description="List of all paginated armor (admin only)")
 async def list_all_bookings(
         page: int = 1,
         page_size: int = 20,
@@ -228,12 +220,6 @@ async def list_all_bookings(
     )
 
 
-@app.get("/_info", tags=["Info"])
+@app.get("/_info", status_code=200, tags=["Info"])
 async def info():
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception as e:
-        db_status = f"error: {e}"
-    return {"status": "ok", "db": db_status}
+    return {"status": "ok"}
