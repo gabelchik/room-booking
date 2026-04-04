@@ -244,6 +244,41 @@ async def create_booking(booking_data: BookingCreate,
         return new_booking
 
 
+@app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse)
+async def cancel_booking(booking_id: uuid.UUID,
+                         current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "FORBIDDEN",
+                              "message": "Only users can create bookings"}}
+        )
+
+    async with new_session() as session:
+        booking = await session.get(Booking, booking_id)
+        if not booking:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "BOOKING_NOT_FOUND",
+                                  "message": "Booking not found"}}
+            )
+
+        if booking.user_id != uuid.UUID(current_user["user_id"]):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "FORBIDDEN",
+                                  "message": "Can't cancel another user's booking"}}
+            )
+
+        if booking.status == "cancelled":
+            return BookingCancelResponse(id=booking.id, status=booking.status)
+
+        booking.status = "cancelled"
+        await session.commit()
+        await session.refresh(booking)
+        return BookingCancelResponse(id=booking.id, status=booking.status)
+
+
 @app.get("/_info")
 async def info():
     try:
