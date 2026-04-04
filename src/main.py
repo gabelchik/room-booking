@@ -1,18 +1,19 @@
 import uuid
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, Depends
 
-from sqlalchemy import text, select
+from sqlalchemy import text, select, func
 
 from contextlib import asynccontextmanager
 
 from datetime import datetime, date, time, timedelta
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import selectinload
 
-from src.services.slot_generator import generate_slots_for_schedule, generate_future_slots_for_schedules
+from src.services.slot_generator import (generate_slots_for_schedule,
+                                         generate_future_slots_for_schedules)
 from src.db.session import engine, new_session
 from src.db.models import User, Room, Schedule, Slot, Booking
 from src.core.security import create_access_token
@@ -21,7 +22,13 @@ from src.schemas.auth import DummyLoginSchema
 from src.schemas.room import RoomCreate, RoomResponse
 from src.schemas.schedule import ScheduleCreate, ScheduleResponse
 from src.schemas.slot import SlotResponse
-from src.schemas.booking import BookingCreate, BookingResponse, BookingCancelResponse
+from src.schemas.booking import (
+    BookingCreate, BookingResponse,
+    BookingCancelResponse, BookingsListResponse,
+    Pagination)
+from src.core.exceptions import (
+    BadRequestError, ForbiddenError, NotFoundError, ConflictError
+)
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -56,10 +63,7 @@ app = FastAPI(title="Room booking Service", lifespan=lifespan)
 @app.post("/dummyLogin")
 async def dummy_login(request: DummyLoginSchema):
     if request.role not in ("admin", "user"):
-        raise HTTPException(status_code=400,
-        detail={"error": {"code": "INVALID_REQUEST",
-                          "message": "role must be admin or user"}}
-        )
+        raise BadRequestError(code="INVALID_REQUEST", message="role must be admin or user")
 
     user_id = str(ADMIN_UUID) if request.role == "admin" else str(USER_UUID)
     token = create_access_token(data={"sub": user_id, "role": request.role})
@@ -78,11 +82,7 @@ async def list_rooms(current_user: dict = Depends(get_current_user)):
 @app.post("/rooms/create", response_model=RoomResponse, status_code=201)
 async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail={"error": {"code": "FORBIDDEN",
-                              "message": "Only admin can create rooms"}}
-        )
+        raise ForbiddenError(code="FORBIDDEN", message="Only admin can create rooms")
 
     async with new_session() as session:
         new_room = Room(
@@ -96,54 +96,39 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
         return new_room
 
 
-@app.post("/rooms/{room_id}/schedule/create",
-          response_model=ScheduleResponse, status_code=201)
+@app.post("/rooms/{room_id}/schedule/create", response_model=ScheduleResponse, status_code=201)
 async def create_schedule(
         room_id: uuid.UUID,
         schedule_data: ScheduleCreate,
         current_user: dict = Depends(get_current_user)
-        ):
+):
     if current_user["role"] != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail={"error": {"code": "FORBIDDEN",
-                              "message": "Only admin can create schedules"}}
-        )
+        raise ForbiddenError(code="FORBIDDEN", message="Only admin can create schedules")
 
     async with new_session() as session:
         room = await session.get(Room, room_id)
         if not room:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"code": "ROOM_NOT_FOUND",
-                                  "message": "Room not found"}}
-            )
+            raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
 
         query = select(Schedule).where(Schedule.room_id == room_id)
         result = await session.execute(query)
         ex_schedule = result.scalar_one_or_none()
         if ex_schedule:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": {"code": "SCHEDULE_EXISTS",
-                                  "message": "Schedule already exists for this room"}}
-            )
+            raise ConflictError(code="SCHEDULE_EXISTS", message="Schedule already exists for this room")
 
         start_time = time.fromisoformat(schedule_data.start_time)
         end_time = time.fromisoformat(schedule_data.end_time)
         new_schedule = Schedule(
-            room_id = room_id,
-            days_of_week = schedule_data.days_of_week,
-            start_time = start_time,
-            end_time = end_time,
+            room_id=room_id,
+            days_of_week=schedule_data.days_of_week,
+            start_time=start_time,
+            end_time=end_time,
         )
-
         session.add(new_schedule)
 
         start_date = date.today()
         end_date = start_date + timedelta(days=7)
         slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
-
         session.add_all(slots)
 
         await session.commit()
@@ -161,77 +146,47 @@ async def list_available_slots(
     try:
         target_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": {"code": "INVALID_REQUEST",
-                              "message": "Invalid date format, use YYYY-MM-DD"}}
-        )
+        raise BadRequestError(code="INVALID_REQUEST", message="Invalid date format, use YYYY-MM-DD")
 
     async with new_session() as session:
         room = await session.get(Room, room_id)
         if not room:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"code": "ROOM_NOT_FOUND",
-                                  "message": "Room not found"}}
-            )
+            raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
 
-    start_day = datetime.combine(
-        target_date, datetime.min.time()).replace(tzinfo=ZoneInfo("UTC"))
-    end_day = start_day + timedelta(days=1)
+        start_day = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=ZoneInfo("UTC"))
+        end_day = start_day + timedelta(days=1)
 
-    query = select(Slot).options(selectinload(Slot.booking)).where(
-        Slot.room_id == room_id,
-        Slot.start >= start_day,
-        Slot.start < end_day
-    ).order_by(Slot.start)
-    result = await session.execute(query)
-    slots = result.scalars().all()
+        query = select(Slot).options(selectinload(Slot.booking)).where(
+            Slot.room_id == room_id,
+            Slot.start >= start_day,
+            Slot.start < end_day
+        ).order_by(Slot.start)
+        result = await session.execute(query)
+        slots = result.scalars().all()
 
-    available_slots = []
-    for slot in slots:
-        if not slot.booking or slot.booking.status != "active":
-            available_slots.append(slot)
-
-    return available_slots
+        available_slots = [slot for slot in slots if not slot.booking or slot.booking.status != "active"]
+        return available_slots
 
 
 @app.post("/bookings/create", response_model=BookingResponse, status_code=201)
-async def create_booking(booking_data: BookingCreate,
-                         current_user: dict = Depends(get_current_user)):
+async def create_booking(booking_data: BookingCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
-        raise HTTPException(
-                status_code=403,
-                detail={"error": {"code": "FORBIDDEN",
-                                  "message": "Only users can create bookings"}}
-            )
+        raise ForbiddenError(code="FORBIDDEN", message="Only users can create bookings")
 
     async with new_session() as session:
         slot = await session.get(Slot, booking_data.slot_id)
         if not slot:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"code": "SLOT_NOT_FOUND",
-                                  "message": "Slot not found"}}
-            )
+            raise NotFoundError(code="SLOT_NOT_FOUND", message="Slot not found")
 
         now = datetime.now(ZoneInfo("UTC"))
         if slot.start < now:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": {"code": "INVALID_REQUEST",
-                                  "message": "Can't book a slot in the past"}}
-            )
+            raise BadRequestError(code="INVALID_REQUEST", message="Can't book a slot in the past")
 
         active_booking = await session.execute(
             select(Booking).where(Booking.slot_id == slot.id, Booking.status == "active")
         )
         if active_booking.scalar_one_or_none():
-            raise HTTPException(
-                status_code=409,
-                detail={"error": {"code": "SLOT_ALREADY_BOOKED",
-                                  "message": "Slot is already booked"}}
-            )
+            raise ConflictError(code="SLOT_ALREADY_BOOKED", message="Slot is already booked")
 
         new_booking = Booking(
             slot_id=booking_data.slot_id,
@@ -245,30 +200,17 @@ async def create_booking(booking_data: BookingCreate,
 
 
 @app.post("/bookings/{booking_id}/cancel", response_model=BookingCancelResponse)
-async def cancel_booking(booking_id: uuid.UUID,
-                         current_user: dict = Depends(get_current_user)):
+async def cancel_booking(booking_id: uuid.UUID, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
-        raise HTTPException(
-            status_code=403,
-            detail={"error": {"code": "FORBIDDEN",
-                              "message": "Only users can create bookings"}}
-        )
+        raise ForbiddenError(code="FORBIDDEN", message="Only users can cancel bookings")
 
     async with new_session() as session:
         booking = await session.get(Booking, booking_id)
         if not booking:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": {"code": "BOOKING_NOT_FOUND",
-                                  "message": "Booking not found"}}
-            )
+            raise NotFoundError(code="BOOKING_NOT_FOUND", message="Booking not found")
 
         if booking.user_id != uuid.UUID(current_user["user_id"]):
-            raise HTTPException(
-                status_code=403,
-                detail={"error": {"code": "FORBIDDEN",
-                                  "message": "Can't cancel another user's booking"}}
-            )
+            raise ForbiddenError(code="FORBIDDEN", message="Can't cancel another user's booking")
 
         if booking.status == "cancelled":
             return BookingCancelResponse(id=booking.id, status=booking.status)
@@ -278,14 +220,11 @@ async def cancel_booking(booking_id: uuid.UUID,
         await session.refresh(booking)
         return BookingCancelResponse(id=booking.id, status=booking.status)
 
+
 @app.get("/bookings/my", response_model=list[BookingResponse])
 async def get_my_bookings(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
-        raise HTTPException(
-            status_code=403,
-            detail={"error": {"code": "FORBIDDEN",
-                              "message": "Only users can view their bookings"}}
-        )
+        raise ForbiddenError(code="FORBIDDEN", message="Only users can view their bookings")
 
     async with new_session() as session:
         now = datetime.now(ZoneInfo("UTC"))
@@ -297,9 +236,40 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user)):
             .order_by(Slot.start)
         )
         result = await session.execute(query)
-        bookings= result.scalars().all()
+        bookings = result.scalars().all()
         return bookings
 
+
+@app.get("/bookings/list", response_model=BookingsListResponse)
+async def list_all_bookings(
+        page: int = 1,
+        page_size: int = 20,
+        current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "admin":
+        raise ForbiddenError(code="FORBIDDEN", message="Only admin can view all bookings")
+
+    if page < 1:
+        raise BadRequestError(code="INVALID_REQUEST", message="page must be >= 1")
+
+    if page_size < 1 or page_size > 100:
+        raise BadRequestError(code="INVALID_REQUEST", message="pageSize must be between 1 and 100")
+
+    offset = (page - 1) * page_size
+
+    async with new_session() as session:
+        query = select(func.count()).select_from(Booking)
+        total_result = await session.execute(query)
+        total = total_result.scalar()
+
+        stmt = select(Booking).order_by(Booking.created_at.desc()).offset(offset).limit(page_size)
+        result = await session.execute(stmt)
+        bookings = result.scalars().all()
+
+        return BookingsListResponse(
+            bookings=bookings,
+            pagination=Pagination(page=page, page_size=page_size, total=total)
+        )
 
 
 @app.get("/_info")
