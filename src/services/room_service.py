@@ -18,6 +18,6 @@ async def create_room_s(session: AsyncSession, room_data: RoomCreate) -> Room:
         capacity=room_data.capacity
     )
     session.add(new_room)
-    await session.commit()
+    await session.flush()
     await session.refresh(new_room)
     return new_room

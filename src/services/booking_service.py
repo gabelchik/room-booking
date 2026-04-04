@@ -25,7 +25,7 @@ async def create_booking_s(session: AsyncSession, slot_id: uuid.UUID, user_id: u
 
     session.add(new_booking)
 
-    await session.commit()
+    await session.flush()
     await session.refresh(new_booking)
 
     return new_booking
@@ -34,7 +34,7 @@ async def create_booking_s(session: AsyncSession, slot_id: uuid.UUID, user_id: u
 async def cancel_booking_s(session: AsyncSession, booking: Booking) -> Booking:
     booking.status = "cancelled"
 
-    await session.commit()
+    await session.flush()
     await session.refresh(booking)
 
     return booking

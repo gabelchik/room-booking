@@ -40,7 +40,7 @@ async def create_schedule_and_slots(
     slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
     session.add_all(slots)
 
-    await session.commit()
+    await session.flush()
     await session.refresh(new_schedule)
 
     return new_schedule

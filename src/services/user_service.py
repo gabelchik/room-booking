@@ -12,4 +12,4 @@ async def ensure_default_users(session: AsyncSession, admin_uuid: uuid.UUID, use
     user = await session.get(User, user_uuid)
     if not user:
         session.add(User(id=user_uuid, role="user"))
-    await session.commit()
+    await session.flush()
