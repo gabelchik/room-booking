@@ -94,7 +94,7 @@ async def create_room(room_data: RoomCreate, current_user: dict = Depends(get_cu
         new_room = Room(
             name=room_data.name,
             description=room_data.description,
-            size=room_data.capacity
+            capacity=room_data.capacity
         )
         session.add(new_room)
         await session.commit()
