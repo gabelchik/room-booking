@@ -1,4 +1,5 @@
 import uuid
+
 from src.db.repositories.user_repository import UserRepository
 
 class UserService:

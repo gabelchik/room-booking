@@ -1,10 +1,10 @@
 import uuid
 
 from .base import BaseRepository
-from src.db.models import User
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models import User
 
 class UserRepository(BaseRepository[User]):
     def __init__(self, session: AsyncSession):
