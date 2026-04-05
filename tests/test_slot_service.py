@@ -1,73 +1,38 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from uuid import uuid4
 from datetime import date
+from uuid import uuid4
 
-from src.services.slot_service import get_slot_by_id, get_available_slots_for_date
-from src.db.models import Slot, Booking
-
-
-@pytest.mark.asyncio
-async def test_get_slot_by_id_found():
-    mock_session = AsyncMock()
-    slot_id = uuid4()
-    expected_slot = Slot(id=slot_id)
-    mock_session.get.return_value = expected_slot
-
-    slot = await get_slot_by_id(mock_session, slot_id)
-
-    assert slot == expected_slot
-    mock_session.get.assert_awaited_once_with(Slot, slot_id)
-
-
-@pytest.mark.asyncio
-async def test_get_slot_by_id_not_found():
-    mock_session = AsyncMock()
-    mock_session.get.return_value = None
-
-    slot = await get_slot_by_id(mock_session, uuid4())
-
-    assert slot is None
+from src.core.exceptions import NotFoundError
+from src.services.slot_service import SlotService
 
 
 @pytest.mark.asyncio
 async def test_get_available_slots_for_date():
-    mock_session = AsyncMock()
+    mock_slot_repo = AsyncMock()
+    mock_room_repo = AsyncMock()
+
     room_id = uuid4()
     target_date = date(2026, 4, 6)
+    mock_room_repo.get.return_value = MagicMock()
+    mock_slot_repo.get_available_slots_for_date.return_value = [MagicMock(), MagicMock()]
 
-    slot1 = Slot()
-    slot1.booking = None
-    slot2 = Slot()
-    slot2.booking = Booking(status="active")
-    slot3 = Slot()
-    slot3.booking = None
+    service = SlotService(mock_slot_repo, mock_room_repo)
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [slot1, slot2, slot3]
-    mock_session.execute.return_value = mock_result
-
-    slots = await get_available_slots_for_date(mock_session, room_id, target_date)
+    slots = await service.get_available_slots_for_date(room_id, target_date)
 
     assert len(slots) == 2
-    assert slot1 in slots
-    assert slot3 in slots
-    assert slot2 not in slots
 
-    mock_session.execute.assert_awaited_once()
-
+    mock_room_repo.get.assert_awaited_once_with(room_id)
+    mock_slot_repo.get_available_slots_for_date.assert_awaited_once()
 
 @pytest.mark.asyncio
-async def test_get_available_slots_for_date_no_slots():
-    mock_session = AsyncMock()
-    room_id = uuid4()
-    target_date = date(2026, 4, 6)
+async def test_get_available_slots_for_date_room_not_found():
+    mock_slot_repo = AsyncMock()
+    mock_room_repo = AsyncMock()
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = []
-    mock_session.execute.return_value = mock_result
-
-    slots = await get_available_slots_for_date(mock_session, room_id, target_date)
-
-    assert len(slots) == 0
+    mock_room_repo.get.return_value = None
+    service = SlotService(mock_slot_repo, mock_room_repo)
+    with pytest.raises(NotFoundError):
+        await service.get_available_slots_for_date(uuid4(), date.today())

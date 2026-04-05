@@ -1,123 +1,112 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-
 from uuid import uuid4
-
-from src.services.booking_service import (
-    get_booking_by_id,
-    has_active_booking,
-    create_booking_s,
-    cancel_booking_s,
-    get_user_future_bookings,
-    get_all_bookings_paginated
-)
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from src.services.booking_service import BookingService
 from src.db.models import Booking
-
-
-@pytest.mark.asyncio
-async def test_get_booking_by_id_found():
-    mock_session = AsyncMock()
-    booking_id = uuid4()
-    expected_booking = Booking(id=booking_id)
-    mock_session.get.return_value = expected_booking
-
-    booking = await get_booking_by_id(mock_session, booking_id)
-
-    assert booking == expected_booking
-    mock_session.get.assert_awaited_once_with(Booking, booking_id)
-
+from src.core.exceptions import NotFoundError, BadRequestError, ConflictError, ForbiddenError
 
 @pytest.mark.asyncio
-async def test_get_booking_by_id_not_found():
-    mock_session = AsyncMock()
-    mock_session.get.return_value = None
+async def test_create_booking_success():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
 
-    booking = await get_booking_by_id(mock_session, uuid4())
-
-    assert booking is None
-
-
-@pytest.mark.asyncio
-async def test_has_active_booking_true():
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = Booking(status="active")
-    mock_session.execute.return_value = mock_result
-
-    result = await has_active_booking(mock_session, uuid4())
-
-    assert result is not None
-
-
-@pytest.mark.asyncio
-async def test_has_active_booking_false():
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_session.execute.return_value = mock_result
-
-    result = await has_active_booking(mock_session, uuid4())
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_create_booking():
-    mock_session = AsyncMock()
     slot_id = uuid4()
     user_id = uuid4()
+    slot = MagicMock()
+    slot.start = datetime.now(ZoneInfo("UTC")) + timedelta(hours=1)
 
-    booking = await create_booking_s(mock_session, slot_id, user_id)
+    mock_slot_repo.get.return_value = slot
+    mock_booking_repo.has_active_booking.return_value = False
+    mock_booking_repo.add.return_value = Booking(slot_id=slot_id, user_id=user_id, status="active")
 
-    assert booking.slot_id == slot_id
-    assert booking.user_id == user_id
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    booking = await service.create_booking(slot_id, user_id)
     assert booking.status == "active"
-
-    mock_session.add.assert_called_once()
-    mock_session.flush.assert_awaited_once()
-    mock_session.refresh.assert_awaited_once()
+    mock_booking_repo.add.assert_awaited_once()
 
 @pytest.mark.asyncio
-async def test_cancel_booking():
-    mock_session = AsyncMock()
+async def test_create_booking_slot_not_found():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
+    mock_slot_repo.get.return_value = None
 
-    cancelled = await cancel_booking_s(mock_session,
-                                       Booking(status="active"))
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    with pytest.raises(NotFoundError):
+        await service.create_booking(uuid4(), uuid4())
+
+@pytest.mark.asyncio
+async def test_create_booking_past_slot():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
+
+    slot = MagicMock()
+    slot.start = datetime.now(ZoneInfo("UTC")) - timedelta(hours=1)
+
+    mock_slot_repo.get.return_value = slot
+
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    with pytest.raises(BadRequestError):
+        await service.create_booking(uuid4(), uuid4())
+
+@pytest.mark.asyncio
+async def test_create_booking_already_booked():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
+
+    slot = MagicMock()
+    slot.start = datetime.now(ZoneInfo("UTC")) + timedelta(hours=1)
+
+    mock_slot_repo.get.return_value = slot
+    mock_booking_repo.has_active_booking.return_value = True
+
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    with pytest.raises(ConflictError):
+        await service.create_booking(uuid4(), uuid4())
+
+@pytest.mark.asyncio
+async def test_cancel_booking_success():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
+
+    booking = Booking(id=uuid4(), user_id=uuid4(), status="active")
+
+    mock_booking_repo.get.return_value = booking
+    mock_booking_repo.update.return_value = booking
+
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    cancelled = await service.cancel_booking(booking.id, booking.user_id)
 
     assert cancelled.status == "cancelled"
-
-    mock_session.flush.assert_awaited_once()
-    mock_session.refresh.assert_awaited_once()
-
+    mock_booking_repo.update.assert_awaited_once_with(booking, status="cancelled")
 
 @pytest.mark.asyncio
-async def test_get_user_future_bookings():
-    mock_session = AsyncMock()
-    user_id = uuid4()
-    future_booking = Booking()
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [future_booking]
-    mock_session.execute.return_value = mock_result
+async def test_cancel_booking_not_found():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
+    mock_booking_repo.get.return_value = None
 
-    bookings = await get_user_future_bookings(mock_session, user_id)
+    service = BookingService(mock_booking_repo, mock_slot_repo)
 
-    assert len(bookings) == 1
-
-    mock_session.execute.assert_awaited_once()
-
+    with pytest.raises(NotFoundError):
+        await service.cancel_booking(uuid4(), uuid4())
 
 @pytest.mark.asyncio
-async def test_get_all_bookings_paginated():
-    mock_session = AsyncMock()
-    mock_session.scalar.return_value = 100
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [Booking() for _ in range(20)]
-    mock_session.execute.return_value = mock_result
+async def test_cancel_booking_wrong_user():
+    mock_booking_repo = AsyncMock()
+    mock_slot_repo = AsyncMock()
 
-    bookings, total = await get_all_bookings_paginated(mock_session, page=2, page_size=20)
+    booking = Booking(id=uuid4(), user_id=uuid4(), status="active")
 
-    assert total == 100
-    assert len(bookings) == 20
+    mock_booking_repo.get.return_value = booking
 
-    mock_session.scalar.assert_awaited_once()
-    mock_session.execute.assert_awaited_once()
+    service = BookingService(mock_booking_repo, mock_slot_repo)
+
+    with pytest.raises(ForbiddenError):
+        await service.cancel_booking(booking.id, uuid4())

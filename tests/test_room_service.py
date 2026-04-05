@@ -1,33 +1,32 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from src.services.room_service import get_all_rooms, create_room_s
+from src.services.room_service import RoomService
 from src.schemas.room import RoomCreate
+from src.db.models import Room
 
 
 @pytest.mark.asyncio
 async def test_get_all_rooms():
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [MagicMock(), MagicMock()]
-    mock_session.execute.return_value = mock_result
+    mock_repo = AsyncMock()
+    mock_repo.get_all_ordered.return_value = [Room(), Room()]
 
-    rooms = await get_all_rooms(mock_session)
+    service = RoomService(mock_repo)
+    rooms = await service.get_all_rooms()
 
     assert len(rooms) == 2
-    mock_session.execute.assert_awaited_once()
+    mock_repo.get_all_ordered.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_create_room():
-    mock_session = AsyncMock()
-    room_data = RoomCreate(name="Test", description="Desc", capacity=5)
-    room = await create_room_s(mock_session, room_data)
+    mock_repo = AsyncMock()
+    mock_repo.add.return_value = Room(name="Test", description="nothing", capacity=5)
+
+    service = RoomService(mock_repo)
+
+    room_data = RoomCreate(name="Test", description="nothing", capacity=5)
+    room = await service.create_room(room_data)
 
     assert room.name == "Test"
-    assert room.description == "Desc"
-    assert room.capacity == 5
-
-    mock_session.add.assert_called_once()
-    mock_session.flush.assert_awaited_once()
-    mock_session.refresh.assert_awaited_once()
+    mock_repo.add.assert_awaited_once()
