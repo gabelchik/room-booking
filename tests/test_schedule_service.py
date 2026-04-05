@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from uuid import uuid4
 from datetime import time
@@ -22,15 +22,14 @@ async def test_create_schedule_and_slots_success():
     mock_room_repo.get.return_value = MagicMock()
     mock_schedule_repo.get_by_room_id.return_value = None
     mock_schedule_repo.add.return_value = MagicMock()
-    mock_slot_repo.add_all = AsyncMock()
 
-    service = ScheduleService(mock_room_repo, mock_schedule_repo, mock_slot_repo)
-    schedule = await service.create_schedule_and_slots(room_id, days, start_time, end_time)
-
-    assert schedule is not None
-
-    mock_schedule_repo.add.assert_awaited_once()
-    mock_slot_repo.add_all.assert_awaited_once()
+    with patch("src.services.schedule_service.generate_slots_for_schedule") as mock_gen:
+        mock_gen.return_value = [MagicMock(), MagicMock()]
+        service = ScheduleService(mock_room_repo, mock_schedule_repo, mock_slot_repo)
+        schedule = await service.create_schedule_and_slots(room_id, days, start_time, end_time)
+        assert schedule is not None
+        mock_schedule_repo.add.assert_awaited_once()
+        mock_slot_repo.add_all.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_create_schedule_room_not_found():

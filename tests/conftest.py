@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from src.db.base import Base
 from src.db.session import get_session
 from src.main import app
-from src.services.user_service import ensure_default_users
+from src.db.repositories.user_repository import UserRepository
+from src.services.user_service import UserService
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -40,7 +41,12 @@ async def setup_test_db():
 
     async with TestingSessionLocal() as session:
         async with session.begin():
-            await ensure_default_users(session, ADMIN_UUID, USER_UUID)
+            user_repo = UserRepository(session)
+            user_service = UserService(user_repo)
+            await user_service.ensure_default_users(
+                uuid.UUID("11111111-1111-1111-1111-111111111111"),
+                uuid.UUID("22222222-2222-2222-2222-222222222222")
+            )
     yield
 
     async with engine_test.begin() as conn:

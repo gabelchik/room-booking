@@ -75,9 +75,10 @@ async def test_cancel_booking_success():
     mock_slot_repo = AsyncMock()
 
     booking = Booking(id=uuid4(), user_id=uuid4(), status="active")
+    cancelled_booking = Booking(id=booking.id, user_id=booking.user_id, status="cancelled")
 
     mock_booking_repo.get.return_value = booking
-    mock_booking_repo.update.return_value = booking
+    mock_booking_repo.update.return_value = cancelled_booking
 
     service = BookingService(mock_booking_repo, mock_slot_repo)
 

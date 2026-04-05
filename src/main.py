@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, time
 
-from zoneinfo import ZoneInfo
 
 from src.db.session import get_session
 from src.core.security import create_access_token
@@ -22,7 +21,7 @@ from src.schemas.booking import (
     Pagination)
 
 from src.core.exceptions import (
-    BadRequestError, ForbiddenError, NotFoundError, ConflictError
+    BadRequestError, ForbiddenError
 )
 from src.core.lifespan import lifespan
 
@@ -89,7 +88,7 @@ async def create_room(
     room_repo = RoomRepository(session)
     room_service = RoomService(room_repo)
 
-    new_room = await room_service.create_room()
+    new_room = await room_service.create_room(room_data)
 
     return new_room
 
