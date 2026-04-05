@@ -23,16 +23,19 @@
 ```
 .
 ├── src/
-│   ├── api/            # зависимости, теги
-│   ├── core/           # конфигурация, security, исключения, lifespan
-│   ├── db/             # модели, сессия, миграции
-│   ├── schemas/        # Pydantic-схемы
-│   ├── services/       # бизнес-логика и работа с БД
+│   ├── api/                # зависимости, теги
+│   ├── core/               # конфигурация, security, исключения, lifespan
+│   ├── db/                 # модели, сессия, миграции, репозитории
+│   │   ├── repositories/   # слой доступа к данным
+│   │   └── models.py
+│   ├── schemas/            # Pydantic-схемы
+│   ├── services/           # бизнес-логика
 │   └── main.py
-├── tests/              # тесты (conftest, интеграционные, юнит)
+├── tests/                  # тесты (conftest, интеграционные, юнит)
 ├── docker-compose.yml
 ├── Dockerfile
-├── entrypoint.sh       # автоматическое применение миграций
+├── entrypoint.sh           # автоматическое применение миграций
+├── pytest.ini
 ├── requirements.txt
 └── README.md
 ```
