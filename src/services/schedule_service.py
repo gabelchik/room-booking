@@ -1,46 +1,66 @@
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from datetime import datetime, timedelta, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from src.db.models import Room, Schedule
+from src.db.models import Schedule
+
+from src.db.repositories.room_repository import RoomRepository
+from src.db.repositories.schedule_repository import ScheduleRepository
+from src.db.repositories.slot_repository import SlotRepository
+
 from src.services.slot_generator import generate_slots_for_schedule
+from src.core.exceptions import NotFoundError, ConflictError
 
 
-async def get_room_by_id(session: AsyncSession, room_id: uuid.UUID) -> Room | None:
-    return await session.get(Room, room_id)
+class ScheduleService:
+    def __init__(
+        self,
+        room_repo: RoomRepository,
+        schedule_repo: ScheduleRepository,
+        slot_repo: SlotRepository
+    ):
+        self.room_repo = room_repo
+        self.schedule_repo = schedule_repo
+        self.slot_repo = slot_repo
 
 
-async def get_existing_schedule(session: AsyncSession, room_id: uuid.UUID) -> Schedule | None:
-    query = select(Schedule).where(Schedule.room_id == room_id)
-    result = await session.execute(query)
-    return result.scalar_one_or_none()
+    async def get_room_by_id(self, room_id: uuid.UUID):
+        return await self.room_repo.get(room_id)
 
 
-async def create_schedule_and_slots(
-    session: AsyncSession,
-    room_id: uuid.UUID,
-    days_of_week: list[int],
-    start_time: time,
-    end_time: time
-) -> Schedule:
-    new_schedule = Schedule(
-        room_id=room_id,
-        days_of_week=days_of_week,
-        start_time=start_time,
-        end_time=end_time
-    )
-    session.add(new_schedule)
+    async def get_existing_schedule(self, room_id: uuid.UUID):
+        return await self.schedule_repo.get_by_room_id(room_id)
 
-    start_date = datetime.now(ZoneInfo("UTC")).date()
-    end_date = start_date + timedelta(days=7)
-    slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
-    session.add_all(slots)
 
-    await session.flush()
-    await session.refresh(new_schedule)
+    async def create_schedule_and_slots(
+        self,
+        room_id: uuid.UUID,
+        days_of_week: list[int],
+        start_time: time,
+        end_time: time
+    ) -> Schedule:
+        room = await self.room_repo.get(room_id)
+        if not room:
+            raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
 
-    return new_schedule
+        existing = await self.schedule_repo.get_by_room_id(room_id)
+        if existing:
+            raise ConflictError(code="SCHEDULE_EXISTS", message="Schedule already exists for this room")
+
+        new_schedule = Schedule(
+            room_id=room_id,
+            days_of_week=days_of_week,
+            start_time=start_time,
+            end_time=end_time
+        )
+        new_schedule = await self.schedule_repo.add(new_schedule)
+
+        start_date = datetime.now(ZoneInfo("UTC")).date()
+        end_date = start_date + timedelta(days=7)
+        slots = generate_slots_for_schedule(new_schedule, start_date, end_date)
+
+        if slots:
+            await self.slot_repo.add_all(slots)
+
+        return new_schedule

@@ -1,23 +1,19 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from src.db.models import Room
+from src.db.repositories.room_repository import RoomRepository
 from src.schemas.room import RoomCreate
+from src.db.models import Room
 
 
-async def get_all_rooms(session: AsyncSession) -> list[Room]:
-    query = select(Room).order_by(Room.created_at)
-    result = await session.execute(query)
-    return result.scalars().all()
+class RoomService:
+    def __init__(self, repo: RoomRepository):
+        self.repo = repo
 
+    async def get_all_rooms(self):
+        return await self.repo.get_all_ordered()
 
-async def create_room_s(session: AsyncSession, room_data: RoomCreate) -> Room:
-    new_room = Room(
-        name=room_data.name,
-        description=room_data.description,
-        capacity=room_data.capacity
-    )
-    session.add(new_room)
-    await session.flush()
-    await session.refresh(new_room)
-    return new_room
+    async def create_room(self, room_data: RoomCreate):
+        new_room = Room(
+            name=room_data.name,
+            description=room_data.description,
+            capacity=room_data.capacity
+        )
+        return await self.repo.add(new_room)

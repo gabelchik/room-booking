@@ -28,13 +28,15 @@ from src.core.lifespan import lifespan
 
 from src.api.tags import tags_metadata
 
-from src.services.room_service import get_all_rooms, create_room_s
-from src.services.schedule_service import get_room_by_id, get_existing_schedule, create_schedule_and_slots
-from src.services.slot_service import get_slot_by_id, get_available_slots_for_date
-from src.services.booking_service import (
-    has_active_booking, create_booking_s, get_booking_by_id,
-    cancel_booking_s, get_user_future_bookings, get_all_bookings_paginated
-)
+from src.services.room_service import RoomService
+from src.services.schedule_service import ScheduleService
+from src.services.slot_service import SlotService
+from src.services.booking_service import BookingService
+
+from src.db.repositories.room_repository import RoomRepository
+from src.db.repositories.schedule_repository import ScheduleRepository
+from src.db.repositories.slot_repository import SlotRepository
+from src.db.repositories.booking_repository import BookingRepository
 
 
 ADMIN_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -59,13 +61,18 @@ async def dummy_login(request: DummyLoginSchema):
     return {"token": token}
 
 
+
 @app.get("/rooms", response_model=list[RoomResponse], tags=["Rooms"],
          description="Shows a list of rooms")
 async def list_rooms(
         current_user: dict = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    rooms = await get_all_rooms(session)
+    room_repo = RoomRepository(session)
+    room_service = RoomService(room_repo)
+
+    rooms = await room_service.get_all_rooms()
+
     return rooms
 
 
@@ -79,7 +86,11 @@ async def create_room(
     if current_user["role"] != "admin":
         raise ForbiddenError(code="FORBIDDEN", message="Only admin can create rooms")
 
-    new_room = await create_room_s(session, room_data)
+    room_repo = RoomRepository(session)
+    room_service = RoomService(room_repo)
+
+    new_room = await room_service.create_room()
+
     return new_room
 
 
@@ -96,19 +107,19 @@ async def create_schedule(
     if current_user["role"] != "admin":
         raise ForbiddenError(code="FORBIDDEN", message="Only admin can create schedules")
 
-    room = await get_room_by_id(session, room_id)
-    if not room:
-        raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
+    room_repo = RoomRepository(session)
+    schedule_repo = ScheduleRepository(session)
+    slot_repo = SlotRepository(session)
 
-    ex_schedule = await get_existing_schedule(session, room_id)
-    if ex_schedule:
-        raise ConflictError(code="SCHEDULE_EXISTS", message="Schedule already exists for this room")
+    schedule_service = ScheduleService(room_repo, schedule_repo, slot_repo)
 
-    start_time = time.fromisoformat(schedule_data.start_time)
-    end_time = time.fromisoformat(schedule_data.end_time)
-    new_schedule = await create_schedule_and_slots(
-        session, room_id, schedule_data.days_of_week, start_time, end_time
+    new_schedule = await schedule_service.create_schedule_and_slots(
+        room_id=room_id,
+        days_of_week = schedule_data.days_of_week,
+        start_time = time.fromisoformat(schedule_data.start_time),
+        end_time = time.fromisoformat(schedule_data.end_time)
     )
+
     return new_schedule
 
 
@@ -126,11 +137,12 @@ async def list_available_slots(
     except ValueError:
         raise BadRequestError(code="INVALID_REQUEST", message="Invalid date format, use YYYY-MM-DD")
 
-    room = await get_room_by_id(session, room_id)
-    if not room:
-        raise NotFoundError(code="ROOM_NOT_FOUND", message="Room not found")
+    room_repo = RoomRepository(session)
+    slot_repo = SlotRepository(session)
 
-    slots = await get_available_slots_for_date(session, room_id, target_date)
+    slot_service = SlotService(slot_repo, room_repo)
+
+    slots = await slot_service.get_available_slots_for_date(room_id, target_date)
 
     return slots
 
@@ -144,18 +156,13 @@ async def create_booking(booking_data: BookingCreate,
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can create bookings")
 
-    slot = await get_slot_by_id(session, booking_data.slot_id)
-    if not slot:
-        raise NotFoundError(code="SLOT_NOT_FOUND", message="Slot not found")
+    booking_repo = BookingRepository(session)
+    slot_repo = SlotRepository(session)
 
-    now = datetime.now(ZoneInfo("UTC"))
-    if slot.start < now:
-        raise BadRequestError(code="INVALID_REQUEST", message="Can't book a slot in the past")
+    bookings_service = BookingService(booking_repo, slot_repo)
 
-    if await has_active_booking(session, booking_data.slot_id):
-        raise ConflictError(code="SLOT_ALREADY_BOOKED", message="Slot is already booked")
-
-    new_booking = await create_booking_s(session, slot.id, uuid.UUID(current_user["user_id"]))
+    new_booking = await bookings_service.create_booking(booking_data.slot_id,
+                                                        uuid.UUID(current_user["user_id"]))
 
     return new_booking
 
@@ -169,17 +176,13 @@ async def cancel_booking(booking_id: uuid.UUID,
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can cancel bookings")
 
-    booking = await get_booking_by_id(session, booking_id)
-    if not booking:
-        raise NotFoundError(code="BOOKING_NOT_FOUND", message="Booking not found")
+    booking_repo = BookingRepository(session)
+    slot_repo = SlotRepository(session)
 
-    if booking.user_id != uuid.UUID(current_user["user_id"]):
-        raise ForbiddenError(code="FORBIDDEN", message="Can't cancel another user's booking")
+    booking_service = BookingService(booking_repo, slot_repo)
 
-    if booking.status == "cancelled":
-        return BookingCancelResponse(id=booking.id, status=booking.status)
-
-    booking = await cancel_booking_s(session, booking)
+    booking = await booking_service.cancel_booking(booking_id,
+                                                   uuid.UUID(current_user["user_id"]))
     return BookingCancelResponse(id=booking.id, status=booking.status)
 
 
@@ -191,9 +194,14 @@ async def get_my_bookings(current_user: dict = Depends(get_current_user),
     if current_user["role"] != "user":
         raise ForbiddenError(code="FORBIDDEN", message="Only users can view their bookings")
 
-    bookings = await get_user_future_bookings(session, uuid.UUID(current_user["user_id"]))
-    return bookings
+    booking_repo = BookingRepository(session)
+    slot_repo = SlotRepository(session)
 
+    booking_service = BookingService(booking_repo, slot_repo)
+
+    bookings = await booking_service.get_user_future_bookings(uuid.UUID(current_user["user_id"]))
+
+    return bookings
 
 @app.get("/bookings/list", response_model=BookingsListResponse,
          tags=["Bookings"], description="List of all paginated armor (admin only)")
@@ -212,7 +220,12 @@ async def list_all_bookings(
     if page_size < 1 or page_size > 100:
         raise BadRequestError(code="INVALID_REQUEST", message="pageSize must be between 1 and 100")
 
-    bookings, total = await get_all_bookings_paginated(session, page, page_size)
+    booking_repo = BookingRepository(session)
+    slot_repo = SlotRepository(session)
+
+    booking_service = BookingService(booking_repo, slot_repo)
+
+    bookings, total = await booking_service.get_all_bookings_paginated(page, page_size)
 
     return BookingsListResponse(
         bookings=bookings,
