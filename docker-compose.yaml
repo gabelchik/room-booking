@@ -30,6 +30,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    profiles:
+      - test
 
   app:
     container_name: room_booking_ap

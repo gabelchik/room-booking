@@ -58,11 +58,18 @@ docker compose up --build
 
 ## Тестирование
 
-Запуск всех тестов с отчётом о покрытии:
-
+Запуск всех тестов с отчётом о покрытии.
+Для запуска тестов сначала поднимите тестовую базу данных:
 ```bash
-docker compose up --build
+docker compose --profile test up -d db_test
+```
+Затем выполните тесты:
+```bash
 docker compose exec app pytest -v --cov=src --cov-report=term
+```
+После завершения тестов остановите тестовую БД:
+```bash
+docker compose --profile test stop db_test
 ```
 
 - **Интеграционный тест** - полный сценарий бронирования комнаты c отменой слота.
